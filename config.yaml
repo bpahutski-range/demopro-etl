@@ -2,7 +2,7 @@ api:
   base_url: "https://api.demographicspro.com/13/api"
   poll_interval_seconds: 5
   max_wait_seconds: 300
-  taxonomy_sections: "GEN|AGE|COU|EDS|INC"
+  taxonomy_sections: ""
 
 pipeline:
   staleness_days: 90

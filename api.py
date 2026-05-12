@@ -172,8 +172,8 @@ def request_fresh_analysis(handle, network):
 def get_taxonomy(sections=None):
     """Fetch taxonomy codes. Uses TAXONOMY_SECTIONS from config by default."""
     from config import TAXONOMY_SECTIONS
-    params = {"section": sections or TAXONOMY_SECTIONS}
-    logger.info(f"Fetching taxonomy sections: {params['section']}")
+    params = {"section": sections or TAXONOMY_SECTIONS} if (sections or TAXONOMY_SECTIONS) else {}
+    logger.info(f"Fetching taxonomy: {'all sections' if not params.get('section') else params['section']}")
     return _get("get_codes", params=params)
 
 
