@@ -76,5 +76,10 @@ def transform_facts(handle, network, request_id, raw_analysis):
             })
 
     df = pd.DataFrame(rows)
+
+    if df.empty:
+        logger.warning(f"transform_facts: @{handle}/{network} — no fact rows returned (analysis_data missing or empty).")
+        return df
+
     logger.info(f"transform_facts: @{handle}/{network} — {len(df)} fact rows across {df['section_name'].nunique()} sections.")
     return df

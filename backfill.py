@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 BACKFILL_CSV      = "/mnt/user-data/uploads/demopro_handles.csv"
 CHECKPOINT_FILE   = "backfill_checkpoint.csv"
 QUARANTINE_FILE   = "output/full_audience_quarantine.csv"
+BATCH_SIZE        = 100
 
 # -----------------------------------------------------------------
 # 3. Cleaning
@@ -125,7 +126,26 @@ def write_checkpoint(handle, network):
 
 
 # -----------------------------------------------------------------
-# 6. Main backfill
+# 6. Batch flusher
+#    Writes a batch of accumulated results to CSV in one shot,
+#    then checkpoints every handle in the batch.
+#    Called every BATCH_SIZE handles and once at the end of the run.
+# -----------------------------------------------------------------
+def flush_batch(handle_rows, fact_frames, succeeded):
+    """Bulk-load one batch to CSV, then write checkpoints for each handle."""
+    load_handles(pd.DataFrame(handle_rows))
+
+    if fact_frames:
+        load_facts(pd.concat(fact_frames, ignore_index=True))
+
+    for handle, network in succeeded:
+        write_checkpoint(handle, network)
+
+    logger.info(f"Flushed batch of {len(succeeded)} handles.")
+
+
+# -----------------------------------------------------------------
+# 7. Main backfill
 # -----------------------------------------------------------------
 def main():
     logger.info("=" * 60)
@@ -153,9 +173,15 @@ def main():
     # -- Fetch account summary once for the entire run
     summary = get_account_summary(days=config.STALENESS_DAYS)
 
-    # -- Process each handle
+    # -- Process each handle in batches of BATCH_SIZE
+    #    Results accumulate in memory; CSV writes and checkpoints happen
+    #    once per batch. Worst-case crash loss = one batch (100 handles).
     succeeded = []
     failed    = []
+
+    batch_handle_rows = []
+    batch_fact_frames = []
+    batch_succeeded   = []
 
     for _, row in remaining.iterrows():
         handle  = row["handle"]
@@ -174,23 +200,28 @@ def main():
             handle_row = transform_handle(handle, network, raw)
             facts      = transform_facts(handle, network, handle_row["request_id"], raw)
 
-            # ---------------------------------------------------------
-            # LOAD
-            # When migrating to Snowflake, load_handles and load_facts
-            # are the only two calls that change. Everything above this
-            # line stays identical.
-            # ---------------------------------------------------------
-            load_handles(pd.DataFrame([handle_row]))
-            load_facts(facts)
-
-            # Only write checkpoint after successful load
-            write_checkpoint(handle, network)
-            succeeded.append((handle, network))
+            batch_handle_rows.append(handle_row)
+            if not facts.empty:
+                batch_fact_frames.append(facts)
+            batch_succeeded.append((handle, network))
 
         except Exception as e:
             logger.error(f"Failed @{handle}/{network} — {e}", exc_info=True)
             failed.append((handle, network, str(e)))
             continue
+
+        # -- Flush to CSV and checkpoint every BATCH_SIZE successes
+        if len(batch_succeeded) >= BATCH_SIZE:
+            flush_batch(batch_handle_rows, batch_fact_frames, batch_succeeded)
+            succeeded.extend(batch_succeeded)
+            batch_handle_rows = []
+            batch_fact_frames = []
+            batch_succeeded   = []
+
+    # -- Flush any remaining handles that didn't fill a full batch
+    if batch_succeeded:
+        flush_batch(batch_handle_rows, batch_fact_frames, batch_succeeded)
+        succeeded.extend(batch_succeeded)
 
     # -- Run summary
     run_end  = datetime.now(timezone.utc)
